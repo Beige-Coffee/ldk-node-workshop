@@ -1,98 +1,79 @@
+use ldk_node::Builder;
+use ldk_node::lightning_invoice::Bolt11Invoice;
+use ldk_node::lightning::ln::msgs::SocketAddress;
 use ldk_node::bitcoin::secp256k1::PublicKey;
 use ldk_node::bitcoin::Network;
-use ldk_node::lightning_invoice::Invoice;
-use ldk_node::{Builder, Config, NetAddress};
 use std::str::FromStr;
+use std::io::{self, Write};
 
-const ESPLORA_SERVER_URL: &str = "http://ldk-node.tnull.de:3002";
-const FAUCET_NODE_ID: &str = "031ee65dc5aca3f6f4c23408014f3554e52ac5c49080b42c1b1d0535ecb636b308";
-const FAUCET_ADDR: &str = "ldk-node.tnull.de:9736";
-
-fn main() {
-	// Welcome! Please run through the the following steps.
-	// "..." marks where you'll need to add code.
-
-	// Setup Config
-	let mut config = Config::default();
-	config.network = Network::Regtest;
-
-	// Configure Esplora URL)
-	//
-	// ...
-
-	// Setup Builder from config and build() node
-	//
-	// ...
-
-	// Start LDK Node
-	//
-	// ...
-
-	// Get a new funding address and have it funded via the faucet
-	//
-	// ...
-	//
-
-	// Open channel to our node (see details above)
-	//
-	// ...
-
-	//==============================================
-	// We're now waiting for the channel to be confirmed:
-	match node.wait_next_event() {
-		ldk_node::Event::ChannelPending { channel_id, counterparty_node_id, .. } => println!(
-			"New channel with {} pending confirmation: {:?}",
-			counterparty_node_id, channel_id
-		),
-		e => println!("Unexpected event: {:?}", e),
-	}
-	node.event_handled();
-
-	// Wait for 6 blocks (a 15 secs)
-	std::thread::sleep(std::time::Duration::from_secs(90));
-	node.sync_wallets().unwrap();
-
-	match node.wait_next_event() {
-		ldk_node::Event::ChannelReady { channel_id, .. } => {
-			println!("Channel {:?} is ready to be used!", channel_id)
-		}
-		e => println!("Unexpected event: {:?}", e),
-	}
-	node.event_handled();
-	//==============================================
-
-	// Parse invoice (Invoice::from_str)
-	//
-	// ...
-	//
-
-	// Pay invoice
-	//
-	// ...
-
-	//==============================================
-	// Wait for the payment to be successful.
-	match node.wait_next_event() {
-		ldk_node::Event::PaymentSuccessful { payment_hash } => {
-			println!("Payment with hash {:?} successful!", payment_hash)
-		}
-		e => println!("Unexpected event: {:?}", e),
-	}
-	node.event_handled();
-	node.stop().unwrap();
+fn setup_node() -> ldk_node::Node {
+    let mut builder = Builder::new();
+    builder.set_network(Network::Regtest);
+	builder.set_esplora_server("http://localhost:30000".to_string());
+    //builder.set_esplora_server("https://blockstream.info/testnet/api".to_string());
+    //builder.set_gossip_source_rgs("https://rapidsync.lightningdevkit.org/testnet/snapshot".to_string());
+    builder.build().unwrap()
 }
 
-fn pause() {
-	use std::io;
-	use std::io::prelude::*;
+fn start_node(node: &ldk_node::Node) {
+    node.start().unwrap();
+}
 
-	let mut stdin = io::stdin();
-	let mut stdout = io::stdout();
 
-	// We want the cursor to stay at the end of the line, so we print without a newline and flush manually.
-	write!(stdout, "Press any key to continue...").unwrap();
-	stdout.flush().unwrap();
+fn perform_operations(node: &ldk_node::Node) {
+    loop {
+        println!("Enter command (new_address, sync, list_balance, connect, send_payment, stop):");
+        let mut command = String::new();
+        io::stdin().read_line(&mut command).unwrap();
+        match command.trim() {
+            "new_address" => {
+                let address = node.onchain_payment().new_address();
+                println!("New address: {:?}", address);
+            },
+            "list_balance" => {
+				let spendable_balance = node.list_balances().spendable_onchain_balance_sats;
+				let total_balance = node.list_balances().total_onchain_balance_sats;
+                println!("Spendable Balance: {:?}", spendable_balance);
+                println!("Total Balance: {:?}", total_balance);
+            },
+            "sync" => {
+                node.sync_wallets().unwrap();
+                println!("Synced...");
+            },
+            "connect" => {
+                println!("Enter node ID:");
+                let mut node_id_str = String::new();
+                io::stdin().read_line(&mut node_id_str).unwrap();
+                let node_id = PublicKey::from_str(node_id_str.trim()).unwrap();
 
-	// Read a single byte and discard
-	let _ = stdin.read(&mut [0u8]).unwrap();
+                println!("Enter node address (IP:PORT):");
+                let mut node_addr_str = String::new();
+                io::stdin().read_line(&mut node_addr_str).unwrap();
+                let node_addr = SocketAddress::from_str(node_addr_str.trim()).unwrap();
+
+                node.connect_open_channel(node_id, node_addr, 10000, None, None, false).unwrap();
+                println!("Connected to node and channel opened.");
+            },
+            "send_payment" => {
+                println!("Enter invoice:");
+                let mut invoice_str = String::new();
+                io::stdin().read_line(&mut invoice_str).unwrap();
+                let invoice = Bolt11Invoice::from_str(invoice_str.trim()).unwrap();
+                node.bolt11_payment().send(&invoice).unwrap();
+                println!("Payment sent.");
+            },
+            "stop" => {
+                node.stop().unwrap();
+                println!("Node stopped.");
+                break;
+            },
+            _ => println!("Unknown command."),
+        }
+    }
+}
+
+fn main() {
+    let node = setup_node();
+    start_node(&node);
+    perform_operations(&node);
 }
